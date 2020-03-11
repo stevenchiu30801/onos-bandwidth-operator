@@ -1,0 +1,7 @@
+apiVersion: bans.io/v1alpha1
+kind: BandwidthSlice
+metadata:
+  name: example-bandwidthslice
+spec:
+  # Add fields here
+  size: 3
