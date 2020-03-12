@@ -4,4 +4,8 @@ metadata:
   name: example-bandwidthslice
 spec:
   # Add fields here
-  size: 3
+  minRate: 0
+  maxRate: 5
+  flows:
+    - srcAddr: "192.168.2.10"
+      dstAddr: "192.168.2.11"
