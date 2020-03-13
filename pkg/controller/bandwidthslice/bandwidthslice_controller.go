@@ -1,7 +1,11 @@
 package bandwidthslice
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
+	"io/ioutil"
+	"net/http"
 
 	bansv1alpha1 "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/apis/bans/v1alpha1"
 	helm "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/helm"
@@ -19,6 +23,11 @@ import (
 )
 
 var reqLogger = logf.Log.WithName("controller_bandwidthslice")
+
+const (
+	ONOS_USERNAME string = "onos"
+	ONOS_PASSWORD string = "rocks"
+)
 
 /**
 * USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
@@ -125,6 +134,34 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		// ONOS already exists
 		reqLogger.Info("ONOS already exists", "Namespace", onos.Namespace, "Name", onos.Name)
 	}
+
+	// Send bandwidth slice request to ONOS
+	client := &http.Client{}
+	buf, err := json.Marshal(instance.Spec)
+	if err != nil {
+		// Malformed BandwidthSliceSpec
+		// Return and don't requeue
+		reqLogger.Error(err, "Cannot marshal BandwidthSliceSpec to JSON format")
+		return reconcile.Result{}, nil
+	}
+	reqLogger.Info("Sending bandwidth slice request", "Body", string(buf))
+	req, err := http.NewRequest("POST",
+		"http://onos-gui.default.svc.cluster.local:8181/onos/bandwidth-management/slices",
+		bytes.NewReader(buf))
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+	resp, err := client.Do(req)
+
+	// Read response from ONOS
+	defer resp.Body.Close()
+	buf, err = ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	reqLogger.Info("Successfully sent bandwidth slice request", "Response", string(buf))
 
 	return reconcile.Result{}, nil
 }
