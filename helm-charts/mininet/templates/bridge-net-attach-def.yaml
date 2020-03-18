@@ -1,17 +1,16 @@
 apiVersion: "k8s.cni.cncf.io/v1"
 kind: NetworkAttachmentDefinition
 metadata:
-  name: mn-enb-bridge-net
+  name: mn-access-bridge-net
   annotations:
     "helm.sh/hook-weight": "-10"
 spec:
   config: '{
-    "name": "mn1",
+    "name": "bansaccess",
     "type": "bridge",
-    "bridge": "mn1",
-    "isDefaultGateway": true,
+    "bridge": "bansaccess",
     "ipam": {
-{{- range $key, $val := .Values.global.mnEnbBridge }}
+{{- range $key, $val := .Values.mnAccessBridge }}
       {{ $key | quote }}: {{ $val | quote }},
 {{- end }}
       "type": "host-local"
@@ -21,16 +20,16 @@ spec:
 apiVersion: "k8s.cni.cncf.io/v1"
 kind: NetworkAttachmentDefinition
 metadata:
-  name: mn-upf-bridge-net
+  name: mn-core-bridge-net
   annotations:
     "helm.sh/hook-weight": "-10"
 spec:
   config: '{
-    "name": "mn2",
+    "name": "banscore",
     "type": "bridge",
-    "bridge": "mn2",
+    "bridge": "banscore",
     "ipam": {
-{{- range $key, $val := .Values.global.mnUpfBridge }}
+{{- range $key, $val := .Values.mnCoreBridge }}
       {{ $key | quote }}: {{ $val | quote }},
 {{- end }}
       "type": "host-local"

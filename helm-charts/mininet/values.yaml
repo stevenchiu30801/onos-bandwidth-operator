@@ -17,12 +17,21 @@ imagePullSecrets: []
 nameOverride: ""
 fullnameOverride: ""
 
-topo: topo.py
+mnCoreBridge:
+  subnet: 192.168.3.0/24
+  rangeStart: 192.168.3.12
+  rangeEnd: 192.168.3.99
+mnAccessBridge:
+  subnet: 192.168.3.0/24
+  rangeStart: 192.168.3.12
+  rangeEnd: 192.168.3.99
+
+topo: topo-bmv2.py
 numIntfs: 2
 onosOpenflowService: onos-openflow.default.svc.cluster.local
 onosGuiService: onos-gui.default.svc.cluster.local
 
-bandwidthManagement: false
+bandwidthManagement: true
 
 podSecurityContext: {}
 

@@ -13,9 +13,13 @@ define echo_red
 	@echo -e "${COLOR_LIGHT_RED}${1}${COLOR_WHITE}"
 endef
 
-.PHONY: install uninstall build
+.PHONY: setup install uninstall build reset-onos
 
-install: ## Install all resources (CR/CRD's, RBAC and Operator)
+setup: ## Setup environment
+	$(call echo_green," ...... Setup Environment ......")
+	kubectl apply -f https://raw.githubusercontent.com/intel/multus-cni/master/images/multus-daemonset.yml
+
+install: setup ## Install all resources (CR/CRD's, RBAC and Operator)
 	$(call echo_green," ....... Creating namespace .......")
 	-kubectl create namespace ${NAMESPACE}
 	$(call echo_green," ....... Applying CRDs .......")
@@ -50,5 +54,6 @@ build: ## Build Operator
 	docker push steven30801/onos-bandwidth-operator
 
 reset-onos:
+	-helm uninstall mininet
 	-helm uninstall onos
 	${SHELL} scripts/wait_pods_terminating.sh ${NAMESPACE}
