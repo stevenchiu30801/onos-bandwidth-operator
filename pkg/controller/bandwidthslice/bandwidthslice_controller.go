@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"net/http"
 	"time"
@@ -11,6 +12,7 @@ import (
 	bansv1alpha1 "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/apis/bans/v1alpha1"
 	helm "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/helm"
 	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -26,8 +28,11 @@ import (
 var reqLogger = logf.Log.WithName("controller_bandwidthslice")
 
 const (
-	ONOS_USERNAME string = "onos"
-	ONOS_PASSWORD string = "rocks"
+	BMV2_DRIVER_APP string = "org.onosproject.drivers.bmv2"
+	BW_MGNT_APP     string = "org.onosproject.bandwidth-management"
+	ONOS_USERNAME   string = "onos"
+	ONOS_PASSWORD   string = "rocks"
+	BMV2_DEVICE     string = "device:bmv2:s1"
 )
 
 /**
@@ -114,13 +119,13 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	if err != nil && errors.IsNotFound(err) {
 		reqLogger.Info("Creating ONOS", "Namespace", instance.Namespace, "Name", "onos")
 
-		// Create ONOS bandwidth management application Helm values
+		// Create ONOS Helm values
 		vals := map[string]interface{}{
 			"bandwidthManagement": true,
 			"env": []map[string]interface{}{
 				{
 					"name":  "ONOS_APPS",
-					"value": "bandwidth-management,drivers,drivers.bmv2,fwd,hostprovider,proxyarp",
+					"value": "drivers,drivers.bmv2,fwd,hostprovider,proxyarp",
 				},
 			},
 		}
@@ -141,7 +146,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	for {
 		// Verfiy state of org.onosproject.drivers.bmv2 application
 		req, err := http.NewRequest("GET",
-			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/applications/org.onosproject.drivers.bmv2",
+			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/applications/"+BMV2_DRIVER_APP,
 			nil)
 		if err != nil {
 			return reconcile.Result{}, err
@@ -149,7 +154,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
 		resp, err := client.Do(req)
 
-		if resp.StatusCode == http.StatusOK {
+		if err == nil && resp.StatusCode == http.StatusOK {
 			// Read response from ONOS
 			defer resp.Body.Close()
 			buf, err := ioutil.ReadAll(resp.Body)
@@ -186,6 +191,111 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		reqLogger.Info("Mininet already exists", "Namespace", mininet.Namespace, "Name", mininet.Name)
 	}
 
+	// Activate Bandwidth Management application if not active
+	req, err := http.NewRequest("GET",
+		"http://onos-gui.default.svc.cluster.local:8181/onos/v1/applications/"+BW_MGNT_APP,
+		nil)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+	req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+	resp, err := client.Do(req)
+
+	if resp.StatusCode == http.StatusOK {
+		// Read response from ONOS
+		defer resp.Body.Close()
+		buf, err := ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		var decoded map[string]interface{}
+		err = json.Unmarshal(buf, &decoded)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		if decoded["state"] != "ACTIVE" {
+			// Create ONOS application command Helm values
+			vals := map[string]interface{}{
+				"appCommand": "activate",
+				"appName":    BW_MGNT_APP,
+			}
+
+			err = helm.InstallHelmChart(instance.Namespace, "onos-app", "activate-bw-mgnt", vals)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+
+			// Wait for activation job succeeded
+			for {
+				activation := &batchv1.Job{}
+				err := r.client.Get(context.TODO(), types.NamespacedName{Name: "activate-bw-mgnt-onos-app", Namespace: instance.Namespace}, activation)
+				if err != nil && errors.IsNotFound(err) {
+					reqLogger.Info("ONOS Bandwidth Management activation job not found after created", "Namespace", instance.Namespace, "Name", "activate-bw-mgnt-onos-app")
+					time.Sleep(1 * time.Second)
+					continue
+				} else if err != nil {
+					reqLogger.Error(err, "Failed to get ONOS Bandwidth Management activation job")
+					return reconcile.Result{}, err
+				}
+				// activation job exists
+				if activation.Status.Succeeded == int32(1) {
+					reqLogger.Info("ONOS Bandwidth Management job succeeded")
+					break
+				}
+				time.Sleep(1 * time.Second)
+			}
+		}
+		// Bandwidth Management application is activated
+	} else {
+		err := fmt.Errorf("Failed to get ONOS Bandwidth Management application")
+		return reconcile.Result{}, err
+	}
+
+	// Check if all flows on BMV2 device are added
+	for {
+		req, err := http.NewRequest("GET",
+			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/flows/"+BMV2_DEVICE,
+			nil)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+		resp, err := client.Do(req)
+
+		if resp.StatusCode == http.StatusOK {
+			// Read response from ONOS
+			defer resp.Body.Close()
+			buf, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			var decoded map[string]interface{}
+			err = json.Unmarshal(buf, &decoded)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			// Check flow state
+			totalFlow := 0
+			addedFlow := 0
+			for _, item := range decoded["flows"].([]interface{}) {
+				totalFlow++
+				state := item.(map[string]interface{})["state"].(string)
+				if state == "ADDED" {
+					addedFlow++
+				}
+			}
+			if addedFlow == totalFlow {
+				break
+			} else {
+				msg := fmt.Sprintf("%d out of %d flows are added", addedFlow, totalFlow)
+				reqLogger.Info(msg)
+			}
+		} else {
+			reqLogger.Info("Failed to get device flows", "Device", BMV2_DEVICE, "HTTPStatus", resp.Status)
+		}
+		time.Sleep(3 * time.Second)
+	}
+
 	// Send bandwidth slice request to ONOS
 	buf, err := json.Marshal(instance.Spec)
 	if err != nil {
@@ -195,7 +305,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		return reconcile.Result{}, nil
 	}
 	reqLogger.Info("Sending bandwidth slice request", "Body", string(buf))
-	req, err := http.NewRequest("POST",
+	req, err = http.NewRequest("POST",
 		"http://onos-gui.default.svc.cluster.local:8181/onos/bandwidth-management/slices",
 		bytes.NewReader(buf))
 	if err != nil {
@@ -203,15 +313,19 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-	resp, err := client.Do(req)
+	resp, err = client.Do(req)
 
 	// Read response from ONOS
-	defer resp.Body.Close()
-	buf, err = ioutil.ReadAll(resp.Body)
-	if err != nil {
-		return reconcile.Result{}, err
+	if resp.StatusCode == http.StatusOK {
+		reqLogger.Info("Successfully sent bandwidth slice request")
+	} else {
+		defer resp.Body.Close()
+		buf, err = ioutil.ReadAll(resp.Body)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		reqLogger.Info("Failed to send bandwidth slice request", "HTTPStatus", resp.Status, "ResponseBody", string(buf))
 	}
-	reqLogger.Info("Successfully sent bandwidth slice request", "Response", string(buf))
 
 	return reconcile.Result{}, nil
 }

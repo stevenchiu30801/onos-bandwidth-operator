@@ -54,6 +54,7 @@ build: ## Build Operator
 	docker push steven30801/onos-bandwidth-operator
 
 reset-onos:
-	-helm uninstall mininet
 	-helm uninstall onos
+	-helm uninstall mininet
+	-helm uninstall activate-bw-mgnt
 	${SHELL} scripts/wait_pods_terminating.sh ${NAMESPACE}
