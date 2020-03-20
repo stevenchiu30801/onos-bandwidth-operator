@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"net/http"
+	"time"
 
 	bansv1alpha1 "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/apis/bans/v1alpha1"
 	helm "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/helm"
@@ -135,8 +136,40 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		reqLogger.Info("ONOS already exists", "Namespace", onos.Namespace, "Name", onos.Name)
 	}
 
-	// Send bandwidth slice request to ONOS
+	// Wait for ONOS to be ready
 	client := &http.Client{}
+	for {
+		// Verfiy state of org.onosproject.drivers.bmv2 application
+		req, err := http.NewRequest("GET",
+			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/applications/org.onosproject.drivers.bmv2",
+			nil)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+		resp, err := client.Do(req)
+
+		if err == nil && resp.StatusCode == http.StatusOK {
+			// Read response from ONOS
+			defer resp.Body.Close()
+			buf, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			var decoded map[string]interface{}
+			err = json.Unmarshal(buf, &decoded)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+			if decoded["state"] == "ACTIVE" {
+				break
+			}
+		}
+		reqLogger.Info("Waiting 3 seconds for ONOS to be ready", "Namespace", onos.Namespace, "Name", onos.Name)
+		time.Sleep(3 * time.Second)
+	}
+
+	// Send bandwidth slice request to ONOS
 	buf, err := json.Marshal(instance.Spec)
 	if err != nil {
 		// Malformed BandwidthSliceSpec
@@ -154,6 +187,9 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
 	resp, err := client.Do(req)
+	if err != nil {
+		return reconcile.Result{}, err
+	}
 
 	// Read response from ONOS
 	defer resp.Body.Close()
