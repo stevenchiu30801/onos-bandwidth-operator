@@ -27,6 +27,13 @@ import (
 
 var reqLogger = logf.Log.WithName("controller_bandwidthslice")
 
+// State of BandwidthSlice
+const (
+	StateNull    string = ""
+	StatePending string = "Pending"
+	StateAdded   string = "Added"
+)
+
 const (
 	BMV2_DRIVER_APP string = "org.onosproject.drivers.bmv2"
 	BW_MGNT_APP     string = "org.onosproject.bandwidth-management"
@@ -110,6 +117,22 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 			return reconcile.Result{}, nil
 		}
 		// Error reading the object - requeue the request.
+		return reconcile.Result{}, err
+	}
+
+	// Check BandwidthSlice.Status.State, if state is Pending or Added then return and don't requeue
+	if instance.Status.State == StatePending || instance.Status.State == StateAdded {
+		return reconcile.Result{}, nil
+	} else if instance.Status.State != StateNull {
+		err := fmt.Errorf("Unknown BandwidthSlice.Status.State %s", instance.Status.State)
+		return reconcile.Result{}, err
+	}
+
+	// Update Bandwidth.Status.State to Pending
+	instance.Status.State = StatePending
+	err = r.client.Status().Update(context.TODO(), instance)
+	if err != nil {
+		reqLogger.Error(err, "Failed to update BandwidthSlice status")
 		return reconcile.Result{}, err
 	}
 
@@ -251,49 +274,10 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		return reconcile.Result{}, err
 	}
 
-	// Check if all flows on BMV2 device are added
-	for {
-		req, err := http.NewRequest("GET",
-			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/flows/"+BMV2_DEVICE,
-			nil)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-		resp, err := client.Do(req)
-
-		if resp.StatusCode == http.StatusOK {
-			// Read response from ONOS
-			defer resp.Body.Close()
-			buf, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				return reconcile.Result{}, err
-			}
-			var decoded map[string]interface{}
-			err = json.Unmarshal(buf, &decoded)
-			if err != nil {
-				return reconcile.Result{}, err
-			}
-			// Check flow state
-			totalFlow := 0
-			addedFlow := 0
-			for _, item := range decoded["flows"].([]interface{}) {
-				totalFlow++
-				state := item.(map[string]interface{})["state"].(string)
-				if state == "ADDED" {
-					addedFlow++
-				}
-			}
-			if addedFlow == totalFlow {
-				break
-			} else {
-				msg := fmt.Sprintf("%d out of %d flows are added", addedFlow, totalFlow)
-				reqLogger.Info(msg)
-			}
-		} else {
-			reqLogger.Info("Failed to get device flows", "Device", BMV2_DEVICE, "HTTPStatus", resp.Status)
-		}
-		time.Sleep(3 * time.Second)
+	// Check if all flows on BMv2 device are added
+	err = waitForFlows()
+	if err != nil {
+		return reconcile.Result{}, err
 	}
 
 	// Send bandwidth slice request to ONOS
@@ -325,7 +309,72 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 			return reconcile.Result{}, err
 		}
 		reqLogger.Info("Failed to send bandwidth slice request", "HTTPStatus", resp.Status, "ResponseBody", string(buf))
+		return reconcile.Result{}, nil
+	}
+
+	// Check if all flows on BMv2 device are added
+	err = waitForFlows()
+	if err != nil {
+		return reconcile.Result{}, err
+	}
+
+	// Update BandwidthSlice.Status.State
+	instance.Status.State = StateAdded
+	err = r.client.Status().Update(context.TODO(), instance)
+	if err != nil {
+		reqLogger.Error(err, "Failed to update BandwidthSlice status")
+		return reconcile.Result{}, err
 	}
 
 	return reconcile.Result{}, nil
+}
+
+// waitForFlows waits for all flows to be added on BMv2 device
+func waitForFlows() error {
+	client := &http.Client{}
+	for {
+		req, err := http.NewRequest("GET",
+			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/flows/"+BMV2_DEVICE,
+			nil)
+		if err != nil {
+			return err
+		}
+		req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+		resp, err := client.Do(req)
+
+		if resp.StatusCode == http.StatusOK {
+			// Read response from ONOS
+			defer resp.Body.Close()
+			buf, err := ioutil.ReadAll(resp.Body)
+			if err != nil {
+				return err
+			}
+			var decoded map[string]interface{}
+			err = json.Unmarshal(buf, &decoded)
+			if err != nil {
+				return err
+			}
+			// Check flow state
+			totalFlow := 0
+			addedFlow := 0
+			for _, item := range decoded["flows"].([]interface{}) {
+				totalFlow++
+				state := item.(map[string]interface{})["state"].(string)
+				if state == "ADDED" {
+					addedFlow++
+				}
+			}
+			if addedFlow == totalFlow {
+				break
+			} else {
+				msg := fmt.Sprintf("%d out of %d flows are added", addedFlow, totalFlow)
+				reqLogger.Info(msg)
+			}
+		} else {
+			reqLogger.Info("Failed to get device flows", "Device", BMV2_DEVICE, "HTTPStatus", resp.Status)
+		}
+		time.Sleep(3 * time.Second)
+	}
+
+	return nil
 }
