@@ -16,7 +16,7 @@ spec:
       containers:
         - name: onos-bandwidth-operator
           # Replace this with the built image name
-          image: steven30801/onos-bandwidth-operator
+          image: steven30801/onos-bandwidth-operator:bmv2-fabric
           command:
           - onos-bandwidth-operator
           imagePullPolicy: Always
