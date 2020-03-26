@@ -49,9 +49,9 @@ uninstall: ## Uninstall all that all performed in the $ make install
 
 build: ## Build Operator
 	$(call echo_green," ...... Building Operator ......")
-	operator-sdk build steven30801/onos-bandwidth-operator:bmv2-fabric
+	operator-sdk build steven30801/onos-bandwidth-operator:latest
 	$(call echo_green," ...... Pushing image ......")
-	docker push steven30801/onos-bandwidth-operator:bmv2-fabric
+	docker push steven30801/onos-bandwidth-operator:latest
 
 reset-onos:
 	-helm uninstall onos
