@@ -18,6 +18,7 @@ endef
 setup: ## Setup environment
 	$(call echo_green," ...... Setup Environment ......")
 	kubectl apply -f https://raw.githubusercontent.com/intel/multus-cni/master/images/multus-daemonset.yml
+	${SHELL} scripts/add_bridge_iptables.sh
 
 install: setup ## Install all resources (CR/CRD's, RBAC and Operator)
 	$(call echo_green," ....... Creating namespace .......")
@@ -58,3 +59,4 @@ reset-onos:
 	-helm uninstall mininet
 	-helm uninstall activate-bw-mgnt
 	${SHELL} scripts/wait_pods_terminating.sh ${NAMESPACE}
+	${SHELL} scripts/remove_bridge_iptables.sh
