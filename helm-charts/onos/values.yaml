@@ -10,7 +10,7 @@ image:
     tag: 1.15.0
   bmv2:
     # private repository
-    repository: steven30801/onos
+    repository: docker.winlab.nctu.me/onos
     tag: latest
   pullPolicy: IfNotPresent
 
