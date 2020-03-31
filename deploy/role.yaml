@@ -70,6 +70,8 @@ rules:
   - bans.io
   resources:
   - '*'
+  - onosdevicenetcfgs
+  - onosqueuenetcfgs
   verbs:
   - create
   - delete

@@ -1,0 +1,35 @@
+apiVersion: bans.io/v1alpha1
+kind: OnosDeviceNetcfg
+metadata:
+  name: example-onosdevicenetcfg
+spec:
+  # Add fields here
+  devices:
+    device:fabric:s1:
+      generalprovider:
+        p4runtime:
+          ip: "127.0.0.1"
+          deviceKeyId: "p4runtime:device:fabric:s1"
+          port: 50051
+          deviceId: 0
+        thrift:
+          port: 9090
+      piPipeconf:
+        piPipeconfId: "org.onosproject.pipelines.basic.montara"
+      ports:
+        1/0:
+          name: "1/0"
+          speed: 100000
+          enabled: true
+          number: 128
+          removed: false
+          type: "copper"
+        2/0:
+          name: "1/0"
+          speed: 100000
+          enabled: true
+          number: 136
+          removed: false
+          type: "copper"
+      basic:
+        driver: "barefoot-pro"

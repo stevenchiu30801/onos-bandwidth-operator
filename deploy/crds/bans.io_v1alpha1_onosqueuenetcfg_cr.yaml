@@ -1,0 +1,16 @@
+apiVersion: bans.io/v1alpha1
+kind: OnosQueueNetcfg
+metadata:
+  name: example-onosqueuenetcfg
+spec:
+  # Add fields here
+  queueDevices:
+    device:fabric:s1:
+      - port: 15
+        qid: 0
+        priority: 1
+        weight: 0
+      - port: 15
+        qid: 1
+        priority: 4
+        weight: 0

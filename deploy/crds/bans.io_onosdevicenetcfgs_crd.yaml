@@ -1,0 +1,143 @@
+apiVersion: apiextensions.k8s.io/v1beta1
+kind: CustomResourceDefinition
+metadata:
+  name: onosdevicenetcfgs.bans.io
+spec:
+  group: bans.io
+  names:
+    kind: OnosDeviceNetcfg
+    listKind: OnosDeviceNetcfgList
+    plural: onosdevicenetcfgs
+    singular: onosdevicenetcfg
+  scope: Namespaced
+  subresources:
+    status: {}
+  validation:
+    openAPIV3Schema:
+      description: OnosDeviceNetcfg is the Schema for the onosdevicenetcfgs API
+      properties:
+        apiVersion:
+          description: 'APIVersion defines the versioned schema of this representation
+            of an object. Servers should convert recognized schemas to the latest
+            internal value, and may reject unrecognized values. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources'
+          type: string
+        kind:
+          description: 'Kind is a string value representing the REST resource this
+            object represents. Servers may infer this from the endpoint the client
+            submits requests to. Cannot be updated. In CamelCase. More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds'
+          type: string
+        metadata:
+          type: object
+        spec:
+          description: OnosDeviceNetcfgSpec defines the desired state of OnosDeviceNetcfg
+          properties:
+            devices:
+              additionalProperties:
+                description: ONOS device
+                properties:
+                  basic:
+                    description: Basic
+                    properties:
+                      driver:
+                        description: Driver
+                        type: string
+                    required:
+                    - driver
+                    type: object
+                  generalprovider:
+                    description: General provider
+                    properties:
+                      p4runtime:
+                        description: P4 Runtime provider
+                        properties:
+                          deviceId:
+                            description: Device ID, defualt 0
+                            type: integer
+                          deviceKeyId:
+                            description: Device key ID
+                            type: string
+                          ip:
+                            description: IP address
+                            type: string
+                          port:
+                            description: Port, default 50051
+                            type: integer
+                        required:
+                        - deviceId
+                        - deviceKeyId
+                        - ip
+                        - port
+                        type: object
+                      thrift:
+                        description: Thrift provider
+                        properties:
+                          port:
+                            description: Port, default 9090
+                            type: integer
+                        required:
+                        - port
+                        type: object
+                    required:
+                    - p4runtime
+                    - thrift
+                    type: object
+                  piPipeconf:
+                    description: PI pipeconf
+                    properties:
+                      piPipeconfId:
+                        type: string
+                    required:
+                    - piPipeconfId
+                    type: object
+                  ports:
+                    additionalProperties:
+                      description: Device port
+                      properties:
+                        enabled:
+                          description: Enabled
+                          type: boolean
+                        name:
+                          description: Name
+                          type: string
+                        number:
+                          description: Number
+                          type: integer
+                        removed:
+                          description: Removed
+                          type: boolean
+                        speed:
+                          description: Speed
+                          type: integer
+                        type:
+                          description: Type
+                          type: string
+                      required:
+                      - enabled
+                      - name
+                      - number
+                      - removed
+                      - speed
+                      - type
+                      type: object
+                    description: Device ports
+                    type: object
+                required:
+                - basic
+                - generalprovider
+                - piPipeconf
+                - ports
+                type: object
+              description: ONOS devices
+              type: object
+          required:
+          - devices
+          type: object
+        status:
+          description: OnosDeviceNetcfgStatus defines the observed state of OnosDeviceNetcfg
+          type: object
+      type: object
+  version: v1alpha1
+  versions:
+  - name: v1alpha1
+    served: true
+    storage: true
