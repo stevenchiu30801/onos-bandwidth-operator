@@ -17,14 +17,15 @@ endef
 
 setup: ## Setup environment
 	$(call echo_green," ...... Setup Environment ......")
-	kubectl apply -f https://raw.githubusercontent.com/intel/multus-cni/master/images/multus-daemonset.yml
-	${SHELL} scripts/add_bridge_iptables.sh
+	# kubectl apply -f https://raw.githubusercontent.com/intel/multus-cni/master/images/multus-daemonset.yml
 
 install: setup ## Install all resources (CR/CRD's, RBAC and Operator)
 	$(call echo_green," ....... Creating namespace .......")
 	-kubectl create namespace ${NAMESPACE}
 	$(call echo_green," ....... Applying CRDs .......")
 	kubectl apply -f deploy/crds/bans.io_bandwidthslice_crd.yaml -n ${NAMESPACE}
+	kubectl apply -f deploy/crds/bans.io_onosdevicenetcfgs_crd.yaml -n ${NAMESPACE}
+	kubectl apply -f deploy/crds/bans.io_onosqueuenetcfgs_crd.yaml -n ${NAMESPACE}
 	$(call echo_green," ....... Applying Rules and Service Account .......")
 	kubectl apply -f deploy/role.yaml -n ${NAMESPACE}
 	kubectl apply -f deploy/role_binding.yaml -n ${NAMESPACE}
@@ -39,6 +40,8 @@ uninstall: ## Uninstall all that all performed in the $ make install
 	$(call echo_red," ....... Uninstalling .......")
 	$(call echo_red," ....... Deleting CRDs.......")
 	-kubectl delete -f deploy/crds/bans.io_bandwidthslice_crd.yaml -n ${NAMESPACE}
+	-kubectl delete -f deploy/crds/bans.io_onosdevicenetcfgs_crd.yaml -n ${NAMESPACE}
+	-kubectl delete -f deploy/crds/bans.io_onosqueuenetcfgs_crd.yaml -n ${NAMESPACE}
 	$(call echo_red," ....... Deleting Rules and Service Account .......")
 	-kubectl delete -f deploy/role.yaml -n ${NAMESPACE}
 	-kubectl delete -f deploy/role_binding.yaml -n ${NAMESPACE}
@@ -56,7 +59,5 @@ build: ## Build Operator
 
 reset-onos:
 	-helm uninstall onos
-	-helm uninstall mininet
 	-helm uninstall activate-bw-mgnt
 	${SHELL} scripts/wait_pods_terminating.sh ${NAMESPACE}
-	${SHELL} scripts/remove_bridge_iptables.sh
