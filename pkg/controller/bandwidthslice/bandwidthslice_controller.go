@@ -35,12 +35,13 @@ const (
 )
 
 const (
-	BMV2_DRIVER_APP string = "org.onosproject.drivers.bmv2"
-	BW_MGNT_APP     string = "org.onosproject.bandwidth-management"
-	ONOS_USERNAME   string = "onos"
-	ONOS_PASSWORD   string = "rocks"
-	BMV2_DEVICE     string = "device:bmv2:s1"
+	DRIVER_APP    string = "org.onosproject.drivers.barefoot-pro"
+	BW_MGNT_APP   string = "org.onosproject.bandwidth-management"
+	ONOS_USERNAME string = "onos"
+	ONOS_PASSWORD string = "rocks"
 )
+
+var deviceList []string
 
 /**
 * USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
@@ -148,7 +149,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 			"env": []map[string]interface{}{
 				{
 					"name":  "ONOS_APPS",
-					"value": "drivers,drivers.bmv2,fwd,hostprovider,proxyarp",
+					"value": "drivers,pipelines.basic-pro,drivers.barefoot-pro,queuenetcfg,fwd,hostprovider,proxyarp",
 				},
 			},
 		}
@@ -165,17 +166,17 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	}
 
 	// Wait for ONOS to be ready
-	client := &http.Client{}
+	httpClient := &http.Client{}
 	for {
-		// Verfiy state of org.onosproject.drivers.bmv2 application
+		// Verfiy state of org.onosproject.drivers.barefoot-pro application
 		req, err := http.NewRequest("GET",
-			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/applications/"+BMV2_DRIVER_APP,
+			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/applications/"+DRIVER_APP,
 			nil)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
 		req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-		resp, err := client.Do(req)
+		resp, err := httpClient.Do(req)
 
 		if err == nil && resp.StatusCode == http.StatusOK {
 			// Read response from ONOS
@@ -197,23 +198,6 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		time.Sleep(3 * time.Second)
 	}
 
-	// Check if Mininet already exists, if not create a new one
-	mininet := &appsv1.Deployment{}
-	err = r.client.Get(context.TODO(), types.NamespacedName{Name: "mininet", Namespace: instance.Namespace}, mininet)
-	if err != nil && errors.IsNotFound(err) {
-		reqLogger.Info("Creating Mininet", "Namespace", instance.Namespace, "Name", "mininet")
-
-		err = helm.InstallHelmChart(instance.Namespace, "mininet", "mininet", nil)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-	} else if err != nil {
-		return reconcile.Result{}, err
-	} else {
-		// Mininet already exists
-		reqLogger.Info("Mininet already exists", "Namespace", mininet.Namespace, "Name", mininet.Name)
-	}
-
 	// Activate Bandwidth Management application if not active
 	req, err := http.NewRequest("GET",
 		"http://onos-gui.default.svc.cluster.local:8181/onos/v1/applications/"+BW_MGNT_APP,
@@ -222,7 +206,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		return reconcile.Result{}, err
 	}
 	req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-	resp, err := client.Do(req)
+	resp, err := httpClient.Do(req)
 
 	if resp.StatusCode == http.StatusOK {
 		// Read response from ONOS
@@ -237,6 +221,94 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 			return reconcile.Result{}, err
 		}
 		if decoded["state"] != "ACTIVE" {
+			// Bandwidth Management application requires devices to be configured on ONOS before activation
+			// Configure ONOS with fabric devices and record device names
+			opts := []client.ListOption{
+				client.InNamespace(instance.Namespace),
+			}
+
+			devicenetcfgs := &bansv1alpha1.OnosDeviceNetcfgList{}
+			err = r.client.List(context.TODO(), devicenetcfgs, opts...)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+
+			for _, devicenetcfg := range devicenetcfgs.Items {
+				// Configure ONOS with devices netcfg
+				buf, err := json.Marshal(devicenetcfg.Spec)
+				if err != nil {
+					reqLogger.Error(err, "Cannot marshal ONOS device netcfg to JSON format", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
+					continue
+				}
+				req, err := http.NewRequest("POST",
+					"http://onos-gui.default.svc.cluster.local:8181/onos/v1/network/configuration",
+					bytes.NewReader(buf))
+				if err != nil {
+					reqLogger.Error(err, "Failed to build new request for ONOS device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
+					continue
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+				resp, err = httpClient.Do(req)
+
+				if resp.StatusCode == http.StatusOK {
+					reqLogger.Info("Successfully configure device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
+				} else {
+					defer resp.Body.Close()
+					buf, _ = ioutil.ReadAll(resp.Body)
+					reqLogger.Info("Failed to configure device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name,
+						"HTTPStatus", resp.Status, "ResponseBody", string(buf))
+					continue
+				}
+
+				// Record device names
+				for device := range devicenetcfg.Spec.Devices {
+					deviceList = append(deviceList, device)
+				}
+			}
+
+			queuenetcfgs := &bansv1alpha1.OnosQueueNetcfgList{}
+			err = r.client.List(context.TODO(), queuenetcfgs, opts...)
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+
+			// TODO(dev): Wait for devices to be connected
+
+			for _, queuenetcfg := range queuenetcfgs.Items {
+				// Configure ONOS with queue netcfg
+				buf, err := json.Marshal(queuenetcfg.Spec)
+				if err != nil {
+					reqLogger.Error(err, "Cannot marshal ONOS queue netcfg to JSON format", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
+					continue
+				}
+				// Concat OnosQueueNetcfg with ONOS APPs configuration JSON object
+				prefix := "{\"apps\":{\"nctu.win.queuenetcfg\":"
+				suffix := "}}"
+				buf = append([]byte(prefix), buf...)
+				buf = append(buf, []byte(suffix)...)
+				req, err := http.NewRequest("POST",
+					"http://onos-gui.default.svc.cluster.local:8181/onos/v1/network/configuration",
+					bytes.NewReader(buf))
+				if err != nil {
+					reqLogger.Error(err, "Failed to build new request for ONOS queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
+					continue
+				}
+				req.Header.Set("Content-Type", "application/json")
+				req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+				resp, err = httpClient.Do(req)
+
+				if resp.StatusCode == http.StatusOK {
+					reqLogger.Info("Successfully configure queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
+				} else {
+					defer resp.Body.Close()
+					buf, _ = ioutil.ReadAll(resp.Body)
+					reqLogger.Info("Failed to configure queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name,
+						"HTTPStatus", resp.Status, "ResponseBody", string(buf))
+					continue
+				}
+			}
+
 			// Create ONOS application command Helm values
 			vals := map[string]interface{}{
 				"appCommand": "activate",
@@ -274,7 +346,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		return reconcile.Result{}, err
 	}
 
-	// Check if all flows on BMv2 device are added
+	// Check if all flows on fabric devices are added
 	err = waitForFlows()
 	if err != nil {
 		return reconcile.Result{}, err
@@ -297,7 +369,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-	resp, err = client.Do(req)
+	resp, err = httpClient.Do(req)
 
 	// Read response from ONOS
 	if resp.StatusCode == http.StatusOK {
@@ -312,7 +384,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		return reconcile.Result{}, nil
 	}
 
-	// Check if all flows on BMv2 device are added
+	// Check if all flows on fabric devices are added
 	err = waitForFlows()
 	if err != nil {
 		return reconcile.Result{}, err
@@ -329,51 +401,53 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	return reconcile.Result{}, nil
 }
 
-// waitForFlows waits for all flows to be added on BMv2 device
+// waitForFlows waits for all flows to be added on fabric devices
 func waitForFlows() error {
-	client := &http.Client{}
-	for {
-		req, err := http.NewRequest("GET",
-			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/flows/"+BMV2_DEVICE,
-			nil)
-		if err != nil {
-			return err
-		}
-		req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-		resp, err := client.Do(req)
+	httpClient := &http.Client{}
+	for _, device := range deviceList {
+		for {
+			req, err := http.NewRequest("GET",
+				"http://onos-gui.default.svc.cluster.local:8181/onos/v1/flows/"+device,
+				nil)
+			if err != nil {
+				return err
+			}
+			req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+			resp, err := httpClient.Do(req)
 
-		if resp.StatusCode == http.StatusOK {
-			// Read response from ONOS
-			defer resp.Body.Close()
-			buf, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				return err
-			}
-			var decoded map[string]interface{}
-			err = json.Unmarshal(buf, &decoded)
-			if err != nil {
-				return err
-			}
-			// Check flow state
-			totalFlow := 0
-			addedFlow := 0
-			for _, item := range decoded["flows"].([]interface{}) {
-				totalFlow++
-				state := item.(map[string]interface{})["state"].(string)
-				if state == "ADDED" {
-					addedFlow++
+			if resp.StatusCode == http.StatusOK {
+				// Read response from ONOS
+				defer resp.Body.Close()
+				buf, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					return err
 				}
-			}
-			if addedFlow == totalFlow {
-				break
+				var decoded map[string]interface{}
+				err = json.Unmarshal(buf, &decoded)
+				if err != nil {
+					return err
+				}
+				// Check flow state
+				totalFlow := 0
+				addedFlow := 0
+				for _, item := range decoded["flows"].([]interface{}) {
+					totalFlow++
+					state := item.(map[string]interface{})["state"].(string)
+					if state == "ADDED" {
+						addedFlow++
+					}
+				}
+				if addedFlow == totalFlow {
+					break
+				} else {
+					msg := fmt.Sprintf("%d out of %d flows are added", addedFlow, totalFlow)
+					reqLogger.Info(msg)
+				}
 			} else {
-				msg := fmt.Sprintf("%d out of %d flows are added", addedFlow, totalFlow)
-				reqLogger.Info(msg)
+				reqLogger.Info("Failed to get device flows", "Device", device, "HTTPStatus", resp.Status)
 			}
-		} else {
-			reqLogger.Info("Failed to get device flows", "Device", BMV2_DEVICE, "HTTPStatus", resp.Status)
+			time.Sleep(3 * time.Second)
 		}
-		time.Sleep(3 * time.Second)
 	}
 
 	return nil
