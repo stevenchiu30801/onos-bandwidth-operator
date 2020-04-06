@@ -233,6 +233,8 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 				return reconcile.Result{}, err
 			}
 
+			// Clear the device list
+			deviceList = nil
 			for _, devicenetcfg := range devicenetcfgs.Items {
 				// Configure ONOS with devices netcfg
 				buf, err := json.Marshal(devicenetcfg.Spec)
@@ -267,13 +269,18 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 				}
 			}
 
+			// Wait for devices to be connected
+			err = waitForDevicesConnected()
+			if err != nil {
+				return reconcile.Result{}, err
+			}
+
+			// Configure ONOS with device queues
 			queuenetcfgs := &bansv1alpha1.OnosQueueNetcfgList{}
 			err = r.client.List(context.TODO(), queuenetcfgs, opts...)
 			if err != nil {
 				return reconcile.Result{}, err
 			}
-
-			// TODO(dev): Wait for devices to be connected
 
 			for _, queuenetcfg := range queuenetcfgs.Items {
 				// Configure ONOS with queue netcfg
@@ -399,6 +406,48 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	}
 
 	return reconcile.Result{}, nil
+}
+
+// waitForDevicesConnected waits for all recorded devices to be connected
+func waitForDevicesConnected() error {
+	httpClient := &http.Client{}
+	for _, device := range deviceList {
+		for {
+			req, err := http.NewRequest("GET",
+				"http://onos-gui.default.svc.cluster.local:8181/onos/v1/devices/"+device,
+				nil)
+			if err != nil {
+				return err
+			}
+			req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+			resp, err := httpClient.Do(req)
+
+			if resp.StatusCode == http.StatusOK {
+				// Read response from ONOS
+				defer resp.Body.Close()
+				buf, err := ioutil.ReadAll(resp.Body)
+				if err != nil {
+					return err
+				}
+				var decoded map[string]interface{}
+				err = json.Unmarshal(buf, &decoded)
+				if err != nil {
+					return err
+				}
+				// Check device availability
+				if decoded["available"].(bool) == true {
+					break
+				} else {
+					reqLogger.Info("Device is unavailable", "Device", device)
+				}
+			} else {
+				reqLogger.Info("Failed to get device information", "Device", device, "HTTPStatus", resp.Status)
+			}
+			time.Sleep(3 * time.Second)
+		}
+	}
+
+	return nil
 }
 
 // waitForFlows waits for all flows to be added on fabric devices
