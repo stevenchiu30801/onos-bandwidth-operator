@@ -149,7 +149,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 			"env": []map[string]interface{}{
 				{
 					"name":  "ONOS_APPS",
-					"value": "drivers,pipelines.basic-pro,drivers.barefoot-pro,queuenetcfg,fwd,hostprovider,proxyarp",
+					"value": "drivers,pipelines.basic-pro,drivers.barefoot-pro,fwd,hostprovider,nctu.win.queuenetcfg,proxyarp",
 				},
 			},
 		}
