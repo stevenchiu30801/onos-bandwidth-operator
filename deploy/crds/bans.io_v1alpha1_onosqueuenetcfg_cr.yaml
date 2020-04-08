@@ -6,11 +6,27 @@ spec:
   # Add fields here
   queueDevices:
     device:fabric:s1:
-      - port: 15
+      - port: 140
         qid: 0
         priority: 1
         weight: 0
-      - port: 15
+      - port: 140
         qid: 1
         priority: 4
+        weight: 0
+      - port: 140
+        qid: 2
+        priority: 7
+        weight: 0
+      - port: 141
+        qid: 0
+        priority: 1
+        weight: 0
+      - port: 141
+        qid: 1
+        priority: 4
+        weight: 0
+      - port: 141
+        qid: 2
+        priority: 7
         weight: 0

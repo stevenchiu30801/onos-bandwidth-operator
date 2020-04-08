@@ -5,14 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/ioutil"
 	"net/http"
+	"strings"
 	"time"
 
 	bansv1alpha1 "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/apis/bans/v1alpha1"
 	helm "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/helm"
 	appsv1 "k8s.io/api/apps/v1"
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -35,10 +38,11 @@ const (
 )
 
 const (
-	DRIVER_APP    string = "org.onosproject.drivers.barefoot-pro"
-	BW_MGNT_APP   string = "org.onosproject.bandwidth-management"
-	ONOS_USERNAME string = "onos"
-	ONOS_PASSWORD string = "rocks"
+	DRIVER_APP        string = "org.onosproject.drivers.barefoot-pro"
+	BW_MGNT_APP       string = "org.onosproject.bandwidth-management"
+	ONOS_GUI_ENDPOINT string = "onos-gui.default.svc.cluster.local:8181"
+	ONOS_USERNAME     string = "onos"
+	ONOS_PASSWORD     string = "rocks"
 )
 
 var deviceList []string
@@ -169,9 +173,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	httpClient := &http.Client{}
 	for {
 		// Verfiy state of org.onosproject.drivers.barefoot-pro application
-		req, err := http.NewRequest("GET",
-			"http://onos-gui.default.svc.cluster.local:8181/onos/v1/applications/"+DRIVER_APP,
-			nil)
+		req, err := http.NewRequest("GET", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/applications/"+DRIVER_APP, nil)
 		if err != nil {
 			return reconcile.Result{}, err
 		}
@@ -199,9 +201,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	}
 
 	// Activate Bandwidth Management application if not active
-	req, err := http.NewRequest("GET",
-		"http://onos-gui.default.svc.cluster.local:8181/onos/v1/applications/"+BW_MGNT_APP,
-		nil)
+	req, err := http.NewRequest("GET", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/applications/"+BW_MGNT_APP, nil)
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -233,35 +233,29 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 				return reconcile.Result{}, err
 			}
 
+			var amfConnectPoint string
 			// Clear the device list
 			deviceList = nil
 			for _, devicenetcfg := range devicenetcfgs.Items {
+				// Record AMF connect point if provided
+				amfConnectPoint = devicenetcfg.Spec.AmfConnectPoint
 				// Configure ONOS with devices netcfg
-				buf, err := json.Marshal(devicenetcfg.Spec)
+				buf, err := json.Marshal(devicenetcfg.Spec.Devices)
+				// Concat OnosDeviceNetcfg.Devices with ONOS devices configuration JSON object
+				prefix := "{\"devices\":"
+				suffix := "}"
+				buf = append([]byte(prefix), buf...)
+				buf = append(buf, []byte(suffix)...)
 				if err != nil {
 					reqLogger.Error(err, "Cannot marshal ONOS device netcfg to JSON format", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
 					continue
 				}
-				req, err := http.NewRequest("POST",
-					"http://onos-gui.default.svc.cluster.local:8181/onos/v1/network/configuration",
-					bytes.NewReader(buf))
+				err = onosNetcfg(bytes.NewReader(buf))
 				if err != nil {
-					reqLogger.Error(err, "Failed to build new request for ONOS device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
+					reqLogger.Error(err, "Failed to configure device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
 					continue
 				}
-				req.Header.Set("Content-Type", "application/json")
-				req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-				resp, err = httpClient.Do(req)
-
-				if resp.StatusCode == http.StatusOK {
-					reqLogger.Info("Successfully configure device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
-				} else {
-					defer resp.Body.Close()
-					buf, _ = ioutil.ReadAll(resp.Body)
-					reqLogger.Info("Failed to configure device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name,
-						"HTTPStatus", resp.Status, "ResponseBody", string(buf))
-					continue
-				}
+				reqLogger.Info("Successfully configure device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
 
 				// Record device names
 				for device := range devicenetcfg.Spec.Devices {
@@ -294,28 +288,58 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 				suffix := "}}"
 				buf = append([]byte(prefix), buf...)
 				buf = append(buf, []byte(suffix)...)
-				req, err := http.NewRequest("POST",
-					"http://onos-gui.default.svc.cluster.local:8181/onos/v1/network/configuration",
-					bytes.NewReader(buf))
+				err = onosNetcfg(bytes.NewReader(buf))
 				if err != nil {
-					reqLogger.Error(err, "Failed to build new request for ONOS queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
+					reqLogger.Error(err, "Failed to configure queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
 					continue
 				}
-				req.Header.Set("Content-Type", "application/json")
-				req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-				resp, err = httpClient.Do(req)
+				reqLogger.Info("Successfully configure queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
+			}
 
-				if resp.StatusCode == http.StatusOK {
-					reqLogger.Info("Successfully configure queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
+			// Configure ONOS hosts with AMF if AMF connect point is provided in OnosDeviceNetcfg
+			if amfConnectPoint != "" {
+				amfList := &corev1.PodList{}
+				opts := []client.ListOption{
+					client.InNamespace(instance.Namespace),
+					client.MatchingLabels(map[string]string{"app.kubernetes.io/instance": "free5gc", "app.kubernetes.io/name": "amf"}),
+				}
+				err := r.client.List(context.TODO(), amfList, opts...)
+				if err != nil {
+					return reconcile.Result{}, err
+				}
+				// Access the first AMF
+				// Decode IP and MAC address of AMF SR-IOV interface from pod metadata
+				var amfIpAddr, amfMacAddr string
+				amfNetworkStatus := amfList.Items[0].ObjectMeta.Annotations["k8s.v1.cni.cncf.io/networks-status"]
+				var decoded []map[string]interface{}
+				err = json.Unmarshal([]byte(amfNetworkStatus), &decoded)
+				if err == nil {
+					for _, item := range decoded {
+						if item["name"].(string) == "amf-sriov" {
+							amfIpAddr = item["ips"].([]interface{})[0].(string)
+							amfMacAddr = item["mac"].(string)
+							break
+						}
+					}
 				} else {
-					defer resp.Body.Close()
-					buf, _ = ioutil.ReadAll(resp.Body)
-					reqLogger.Info("Failed to configure queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name,
-						"HTTPStatus", resp.Status, "ResponseBody", string(buf))
-					continue
+					reqLogger.Error(err, "Failed to decode networks status of AMF pod", "Namespace", amfList.Items[0].Namespace, "Name", amfList.Items[0].Name)
+				}
+
+				if amfIpAddr != "" && amfMacAddr != "" {
+					// Build ONOS host netcfg
+					onosHostNetcfg := fmt.Sprintf("{\"hosts\": {\"%s/-1\": {\"basic\": {\"ips\": [\"%s\"], \"locations\": [\"%s\"]}}}}",
+						amfMacAddr, amfIpAddr, amfConnectPoint)
+					err := onosNetcfg(strings.NewReader(onosHostNetcfg))
+					if err != nil {
+						reqLogger.Error(err, "Failed to configure host netcfg")
+					}
+					reqLogger.Info("Successfully configure host netcfg")
+				} else {
+					reqLogger.Info("Cannot access available AMF IP and MAC address")
 				}
 			}
 
+			// Activate bandwidth management application
 			// Create ONOS application command Helm values
 			vals := map[string]interface{}{
 				"appCommand": "activate",
@@ -368,9 +392,7 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		return reconcile.Result{}, nil
 	}
 	reqLogger.Info("Sending bandwidth slice request", "Body", string(buf))
-	req, err = http.NewRequest("POST",
-		"http://onos-gui.default.svc.cluster.local:8181/onos/bandwidth-management/slices",
-		bytes.NewReader(buf))
+	req, err = http.NewRequest("POST", "http://"+ONOS_GUI_ENDPOINT+"/onos/bandwidth-management/slices", bytes.NewReader(buf))
 	if err != nil {
 		return reconcile.Result{}, err
 	}
@@ -408,14 +430,32 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	return reconcile.Result{}, nil
 }
 
+func onosNetcfg(body io.Reader) error {
+	httpClient := &http.Client{}
+	req, err := http.NewRequest("POST", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/network/configuration", body)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
+	resp, err := httpClient.Do(req)
+
+	if resp.StatusCode != http.StatusOK {
+		defer resp.Body.Close()
+		buf, _ := ioutil.ReadAll(resp.Body)
+		err := fmt.Errorf("HTTPStatus: %s, ResponseBody: %s", resp.Status, string(buf))
+		return err
+	}
+
+	return nil
+}
+
 // waitForDevicesConnected waits for all recorded devices to be connected
 func waitForDevicesConnected() error {
 	httpClient := &http.Client{}
 	for _, device := range deviceList {
 		for {
-			req, err := http.NewRequest("GET",
-				"http://onos-gui.default.svc.cluster.local:8181/onos/v1/devices/"+device,
-				nil)
+			req, err := http.NewRequest("GET", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/devices/"+device, nil)
 			if err != nil {
 				return err
 			}
@@ -455,9 +495,7 @@ func waitForFlows() error {
 	httpClient := &http.Client{}
 	for _, device := range deviceList {
 		for {
-			req, err := http.NewRequest("GET",
-				"http://onos-gui.default.svc.cluster.local:8181/onos/v1/flows/"+device,
-				nil)
+			req, err := http.NewRequest("GET", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/flows/"+device, nil)
 			if err != nil {
 				return err
 			}

@@ -31,6 +31,9 @@ spec:
         spec:
           description: OnosDeviceNetcfgSpec defines the desired state of OnosDeviceNetcfg
           properties:
+            amfConnectPoint:
+              description: AMF connect point
+              type: string
             devices:
               additionalProperties:
                 description: ONOS device
