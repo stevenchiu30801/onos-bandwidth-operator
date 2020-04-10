@@ -46,6 +46,7 @@ const (
 )
 
 var deviceList []string
+var upfConnectPoint string
 
 /**
 * USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
@@ -237,8 +238,9 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 			// Clear the device list
 			deviceList = nil
 			for _, devicenetcfg := range devicenetcfgs.Items {
-				// Record AMF connect point if provided
+				// Record AMF and UPF connect point if provided
 				amfConnectPoint = devicenetcfg.Spec.AmfConnectPoint
+				upfConnectPoint = devicenetcfg.Spec.UpfConnectPoint
 				// Configure ONOS with devices netcfg
 				buf, err := json.Marshal(devicenetcfg.Spec.Devices)
 				// Concat OnosDeviceNetcfg.Devices with ONOS devices configuration JSON object
@@ -327,13 +329,13 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 
 				if amfIpAddr != "" && amfMacAddr != "" {
 					// Build ONOS host netcfg
-					onosHostNetcfg := fmt.Sprintf("{\"hosts\": {\"%s/-1\": {\"basic\": {\"ips\": [\"%s\"], \"locations\": [\"%s\"]}}}}",
+					amfHostNetcfg := fmt.Sprintf("{\"hosts\": {\"%s/-1\": {\"basic\": {\"ips\": [\"%s\"], \"locations\": [\"%s\"]}}}}",
 						amfMacAddr, amfIpAddr, amfConnectPoint)
-					err := onosNetcfg(strings.NewReader(onosHostNetcfg))
+					err := onosNetcfg(strings.NewReader(amfHostNetcfg))
 					if err != nil {
-						reqLogger.Error(err, "Failed to configure host netcfg")
+						reqLogger.Error(err, "Failed to configure host netcfg", "Body", amfHostNetcfg)
 					}
-					reqLogger.Info("Successfully configure host netcfg")
+					reqLogger.Info("Successfully configure host netcfg", "Body", amfHostNetcfg)
 				} else {
 					reqLogger.Info("Cannot access available AMF IP and MAC address")
 				}
@@ -381,6 +383,58 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	err = waitForFlows()
 	if err != nil {
 		return reconcile.Result{}, err
+	}
+
+	// Configure ONOS hosts with UPF slice if UPF connect point is provided in OnosDeviceNetcfg
+	if upfConnectPoint != "" {
+		sliceLabel := instance.ObjectMeta.Labels["bans.io/slice"]
+		upfList := &corev1.PodList{}
+		opts := []client.ListOption{
+			client.InNamespace(instance.Namespace),
+			client.MatchingLabels(map[string]string{
+				"app.kubernetes.io/instance": "free5gc-upf-" + sliceLabel,
+				"app.kubernetes.io/name":     "free5gc-upf",
+				"bans.io/slice":              sliceLabel,
+			}),
+		}
+		err := r.client.List(context.TODO(), upfList, opts...)
+		if err != nil {
+			return reconcile.Result{}, err
+		}
+		// Access the first UPF
+		// Decode IP and MAC address of UPF SR-IOV interface from pod metadata
+		var upfIpAddr, upfMacAddr string
+		if len(upfList.Items) == 0 {
+			reqLogger.Info("No UPF exists with BANS slice label", "bans.io/slice", sliceLabel)
+		} else {
+			upfNetworkStatus := upfList.Items[0].ObjectMeta.Annotations["k8s.v1.cni.cncf.io/networks-status"]
+			var decoded []map[string]interface{}
+			err = json.Unmarshal([]byte(upfNetworkStatus), &decoded)
+			if err == nil {
+				for _, item := range decoded {
+					if item["name"].(string) == "upf-sriov" {
+						upfIpAddr = item["ips"].([]interface{})[0].(string)
+						upfMacAddr = item["mac"].(string)
+						break
+					}
+				}
+			} else {
+				reqLogger.Error(err, "Failed to decode networks status of UPF pod", "Namespace", upfList.Items[0].Namespace, "Name", upfList.Items[0].Name)
+			}
+		}
+
+		if upfIpAddr != "" && upfMacAddr != "" {
+			// Build ONOS host netcfg
+			upfHostNetcfg := fmt.Sprintf("{\"hosts\": {\"%s/-1\": {\"basic\": {\"ips\": [\"%s\"], \"locations\": [\"%s\"]}}}}",
+				upfMacAddr, upfIpAddr, upfConnectPoint)
+			err := onosNetcfg(strings.NewReader(upfHostNetcfg))
+			if err != nil {
+				reqLogger.Error(err, "Failed to configure host netcfg", "Body", upfHostNetcfg)
+			}
+			reqLogger.Info("Successfully configure host netcfg", "Body", upfHostNetcfg)
+		} else {
+			reqLogger.Info("Cannot access available UPF IP and MAC address")
+		}
 	}
 
 	// Send bandwidth slice request to ONOS

@@ -132,6 +132,9 @@ spec:
                 type: object
               description: ONOS devices
               type: object
+            upfConnectPoint:
+              description: UPF connect point
+              type: string
           required:
           - devices
           type: object

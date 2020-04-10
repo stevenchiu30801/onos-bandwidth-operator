@@ -95,6 +95,9 @@ type OnosDeviceNetcfgSpec struct {
 
 	// AMF connect point
 	AmfConnectPoint string `json:"amfConnectPoint,omitempty"`
+
+	// UPF connect point
+	UpfConnectPoint string `json:"upfConnectPoint,omitempty"`
 }
 
 // OnosDeviceNetcfgStatus defines the observed state of OnosDeviceNetcfg

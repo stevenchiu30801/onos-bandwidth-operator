@@ -34,3 +34,4 @@ spec:
       basic:
         driver: "barefoot-pro"
   amfConnectPoint: "device:fabric:s1/141"
+  upfConnectPoint: "device:fabric:s1/141"
