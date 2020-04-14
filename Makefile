@@ -40,8 +40,8 @@ uninstall: ## Uninstall all that all performed in the $ make install
 	$(call echo_red," ....... Uninstalling .......")
 	$(call echo_red," ....... Deleting CRDs.......")
 	-kubectl delete -f deploy/crds/bans.io_bandwidthslice_crd.yaml -n ${NAMESPACE}
-	-kubectl delete -f deploy/crds/bans.io_onosdevicenetcfgs_crd.yaml -n ${NAMESPACE}
-	-kubectl delete -f deploy/crds/bans.io_onosqueuenetcfgs_crd.yaml -n ${NAMESPACE}
+	# -kubectl delete -f deploy/crds/bans.io_onosdevicenetcfgs_crd.yaml -n ${NAMESPACE}
+	# -kubectl delete -f deploy/crds/bans.io_onosqueuenetcfgs_crd.yaml -n ${NAMESPACE}
 	$(call echo_red," ....... Deleting Rules and Service Account .......")
 	-kubectl delete -f deploy/role.yaml -n ${NAMESPACE}
 	-kubectl delete -f deploy/role_binding.yaml -n ${NAMESPACE}
