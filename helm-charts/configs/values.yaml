@@ -1,0 +1,9 @@
+# ONOS
+bandwidthManagement: true
+env:
+  - name: ONOS_APPS
+    value: drivers,drivers.bmv2,fwd,hostprovider,proxyarp
+
+# ONOS APP
+appCommand: activate
+appName: org.onosproject.bandwidth-management

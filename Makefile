@@ -1,5 +1,9 @@
 SHELL		:= /bin/bash
 NAMESPACE	:= default
+MAKEDIR		:= $(dir $(realpath $(firstword $(MAKEFILE_LIST))))
+HELMDIR		:= $(MAKEDIR)/helm-charts
+
+HELM_ARGS	?= --install --wait --timeout 6m -f $(HELMDIR)/configs/values.yaml
 
 COLOR_WHITE			= \033[0m
 COLOR_LIGHT_GREEN	= \033[1;32m
@@ -20,7 +24,27 @@ setup: ## Setup environment
 	kubectl apply -f https://raw.githubusercontent.com/intel/multus-cni/master/images/multus-daemonset.yml
 	${SHELL} scripts/add_bridge_iptables.sh
 
-install: setup ## Install all resources (CR/CRD's, RBAC and Operator)
+transport: ## Prepare transport network environment
+	helm upgrade $(HELM_ARGS) onos $(HELMDIR)/onos
+	@until http -a onos:rocks --ignore-stdin --check-status GET http://127.0.0.1:30181/onos/v1/applications/org.onosproject.drivers.bmv2 2>&- | jq '.state' 2>&- | grep 'ACTIVE' >/dev/null; \
+	do \
+		echo "Waiting for ONOS to be ready"; \
+		sleep 5; \
+	done
+	helm upgrade $(HELM_ARGS) mininet $(HELMDIR)/mininet
+	helm upgrade $(HELM_ARGS) activate-bw-mgnt $(HELMDIR)/onos-app
+	@until kubectl get job -o=jsonpath='{.items[?(@.status.succeeded==1)].metadata.name}' | grep 'activate-bw-mgnt-onos-app' >/dev/null; \
+	do \
+		echo "Waiting for bandwidth management application to be activated"; \
+		sleep 3; \
+	done
+	@until ! http -a onos:rocks GET http://127.0.0.1:30181/onos/v1/flows/device:bmv2:s1 2>&- | jq '.flows[].state' | grep 'PENDING_ADD' >/dev/null; \
+	do \
+		echo "Waiting for flows of bandwidth management to be added"; \
+		sleep 5; \
+	done
+
+install: setup transport ## Install all resources (CR/CRD's, RBAC and Operator)
 	$(call echo_green," ....... Creating namespace .......")
 	-kubectl create namespace ${NAMESPACE}
 	$(call echo_green," ....... Applying CRDs .......")
