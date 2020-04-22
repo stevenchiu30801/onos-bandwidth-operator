@@ -72,6 +72,7 @@ rules:
   - '*'
   - onosdevicenetcfgs
   - onosqueuenetcfgs
+  - fabricconfigs
   verbs:
   - create
   - delete

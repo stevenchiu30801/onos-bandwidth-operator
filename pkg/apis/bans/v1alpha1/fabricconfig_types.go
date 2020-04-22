@@ -7,36 +7,21 @@ import (
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
 // NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
 
-// Queue
-type Queue struct {
-	// Port
-	Port uint16 `json:"port"`
-
-	// Queue ID
-	Qid int `json:"qid"`
-
-	// Priority
-	Priority int `json:"priority"`
-
-	// Weight
-	Weight int `json:"weight"`
-}
-
-// Queues
-type Queues []Queue
-
-// OnosQueueNetcfgSpec defines the desired state of OnosQueueNetcfg
-type OnosQueueNetcfgSpec struct {
+// FabricConfigSpec defines the desired state of FabricConfig
+type FabricConfigSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
 
-	// Queue devices
-	QueueDevices map[string]Queues `json:"queueDevices"`
+	// Device list
+	Devices []string `json:"devices"`
+
+	// Connect point list
+	ConnectPoints map[string]string `json:"connectPoints"`
 }
 
-// OnosQueueNetcfgStatus defines the observed state of OnosQueueNetcfg
-type OnosQueueNetcfgStatus struct {
+// FabricConfigStatus defines the observed state of FabricConfig
+type FabricConfigStatus struct {
 	// INSERT ADDITIONAL STATUS FIELD - define observed state of cluster
 	// Important: Run "operator-sdk generate k8s" to regenerate code after modifying this file
 	// Add custom validation using kubebuilder tags: https://book-v1.book.kubebuilder.io/beyond_basics/generating_crd.html
@@ -44,26 +29,26 @@ type OnosQueueNetcfgStatus struct {
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
-// OnosQueueNetcfg is the Schema for the onosqueuenetcfgs API
+// FabricConfig is the Schema for the fabricconfigs API
 // +kubebuilder:subresource:status
-// +kubebuilder:resource:path=onosqueuenetcfgs,scope=Namespaced
-type OnosQueueNetcfg struct {
+// +kubebuilder:resource:path=fabricconfigs,scope=Namespaced
+type FabricConfig struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
 
-	Spec   OnosQueueNetcfgSpec   `json:"spec,omitempty"`
-	Status OnosQueueNetcfgStatus `json:"status,omitempty"`
+	Spec   FabricConfigSpec   `json:"spec,omitempty"`
+	Status FabricConfigStatus `json:"status,omitempty"`
 }
 
 // +k8s:deepcopy-gen:interfaces=k8s.io/apimachinery/pkg/runtime.Object
 
-// OnosQueueNetcfgList contains a list of OnosQueueNetcfg
-type OnosQueueNetcfgList struct {
+// FabricConfigList contains a list of FabricConfig
+type FabricConfigList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
-	Items           []OnosQueueNetcfg `json:"items"`
+	Items           []FabricConfig `json:"items"`
 }
 
 func init() {
-	SchemeBuilder.Register(&OnosQueueNetcfg{}, &OnosQueueNetcfgList{})
+	SchemeBuilder.Register(&FabricConfig{}, &FabricConfigList{})
 }

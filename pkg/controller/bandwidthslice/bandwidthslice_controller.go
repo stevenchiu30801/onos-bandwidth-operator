@@ -12,13 +12,11 @@ import (
 	"time"
 
 	bansv1alpha1 "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/apis/bans/v1alpha1"
-	helm "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/helm"
+	fabricconfig "github.com/stevenchiu30801/onos-bandwidth-operator/pkg/controller/fabricconfig"
 	appsv1 "k8s.io/api/apps/v1"
-	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -44,9 +42,6 @@ const (
 	ONOS_USERNAME     string = "onos"
 	ONOS_PASSWORD     string = "rocks"
 )
-
-var deviceList []string
-var upfConnectPoint string
 
 /**
 * USER ACTION REQUIRED: This is a scaffold file intended for the user to modify with their own Controller
@@ -142,299 +137,16 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		return reconcile.Result{}, err
 	}
 
-	// Check if ONOS already exists, if not create a new one
-	onos := &appsv1.Deployment{}
-	err = r.client.Get(context.TODO(), types.NamespacedName{Name: "onos", Namespace: instance.Namespace}, onos)
-	if err != nil && errors.IsNotFound(err) {
-		reqLogger.Info("Creating ONOS", "Namespace", instance.Namespace, "Name", "onos")
-
-		// Create ONOS Helm values
-		vals := map[string]interface{}{
-			"bandwidthManagement": true,
-			"env": []map[string]interface{}{
-				{
-					"name":  "ONOS_APPS",
-					"value": "drivers,pipelines.basic-pro,drivers.barefoot-pro,fwd,hostprovider,nctu.win.queuenetcfg,proxyarp",
-				},
-			},
-		}
-
-		err = helm.InstallHelmChart(instance.Namespace, "onos", "onos", vals)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-	} else if err != nil {
-		return reconcile.Result{}, err
-	} else {
-		// ONOS already exists
-		reqLogger.Info("ONOS already exists", "Namespace", onos.Namespace, "Name", onos.Name)
-	}
-
-	// Wait for ONOS to be ready
-	httpClient := &http.Client{}
-	for {
-		// Verfiy state of org.onosproject.drivers.barefoot-pro application
-		req, err := http.NewRequest("GET", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/applications/"+DRIVER_APP, nil)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-		resp, err := httpClient.Do(req)
-
-		if err == nil && resp.StatusCode == http.StatusOK {
-			// Read response from ONOS
-			defer resp.Body.Close()
-			buf, err := ioutil.ReadAll(resp.Body)
-			if err != nil {
-				return reconcile.Result{}, err
-			}
-			var decoded map[string]interface{}
-			err = json.Unmarshal(buf, &decoded)
-			if err != nil {
-				return reconcile.Result{}, err
-			}
-			if decoded["state"] == "ACTIVE" {
-				break
-			}
-		}
-		reqLogger.Info("Waiting 3 seconds for ONOS to be ready", "Namespace", onos.Namespace, "Name", onos.Name)
-		time.Sleep(3 * time.Second)
-	}
-
-	// Activate Bandwidth Management application if not active
-	req, err := http.NewRequest("GET", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/applications/"+BW_MGNT_APP, nil)
+	// Configure ONOS hosts with AMF
+	err = r.configureAmfHost(instance.Namespace)
 	if err != nil {
-		return reconcile.Result{}, err
-	}
-	req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-	resp, err := httpClient.Do(req)
-
-	if resp.StatusCode == http.StatusOK {
-		// Read response from ONOS
-		defer resp.Body.Close()
-		buf, err := ioutil.ReadAll(resp.Body)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		var decoded map[string]interface{}
-		err = json.Unmarshal(buf, &decoded)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		if decoded["state"] != "ACTIVE" {
-			// Bandwidth Management application requires devices to be configured on ONOS before activation
-			// Configure ONOS with fabric devices and record device names
-			opts := []client.ListOption{
-				client.InNamespace(instance.Namespace),
-			}
-
-			devicenetcfgs := &bansv1alpha1.OnosDeviceNetcfgList{}
-			err = r.client.List(context.TODO(), devicenetcfgs, opts...)
-			if err != nil {
-				return reconcile.Result{}, err
-			}
-
-			var amfConnectPoint string
-			// Clear the device list
-			deviceList = nil
-			for _, devicenetcfg := range devicenetcfgs.Items {
-				// Record AMF and UPF connect point if provided
-				amfConnectPoint = devicenetcfg.Spec.AmfConnectPoint
-				upfConnectPoint = devicenetcfg.Spec.UpfConnectPoint
-				// Configure ONOS with devices netcfg
-				buf, err := json.Marshal(devicenetcfg.Spec.Devices)
-				// Concat OnosDeviceNetcfg.Devices with ONOS devices configuration JSON object
-				prefix := "{\"devices\":"
-				suffix := "}"
-				buf = append([]byte(prefix), buf...)
-				buf = append(buf, []byte(suffix)...)
-				if err != nil {
-					reqLogger.Error(err, "Cannot marshal ONOS device netcfg to JSON format", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
-					continue
-				}
-				err = onosNetcfg(bytes.NewReader(buf))
-				if err != nil {
-					reqLogger.Error(err, "Failed to configure device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
-					continue
-				}
-				reqLogger.Info("Successfully configure device netcfg", "Namespace", devicenetcfg.Namespace, "Name", devicenetcfg.Name)
-
-				// Record device names
-				for device := range devicenetcfg.Spec.Devices {
-					deviceList = append(deviceList, device)
-				}
-			}
-
-			// Wait for devices to be connected
-			err = waitForDevicesConnected()
-			if err != nil {
-				return reconcile.Result{}, err
-			}
-
-			// Configure ONOS with device queues
-			queuenetcfgs := &bansv1alpha1.OnosQueueNetcfgList{}
-			err = r.client.List(context.TODO(), queuenetcfgs, opts...)
-			if err != nil {
-				return reconcile.Result{}, err
-			}
-
-			for _, queuenetcfg := range queuenetcfgs.Items {
-				// Configure ONOS with queue netcfg
-				buf, err := json.Marshal(queuenetcfg.Spec)
-				if err != nil {
-					reqLogger.Error(err, "Cannot marshal ONOS queue netcfg to JSON format", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
-					continue
-				}
-				// Concat OnosQueueNetcfg with ONOS APPs configuration JSON object
-				prefix := "{\"apps\":{\"nctu.win.queuenetcfg\":"
-				suffix := "}}"
-				buf = append([]byte(prefix), buf...)
-				buf = append(buf, []byte(suffix)...)
-				err = onosNetcfg(bytes.NewReader(buf))
-				if err != nil {
-					reqLogger.Error(err, "Failed to configure queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
-					continue
-				}
-				reqLogger.Info("Successfully configure queue netcfg", "Namespace", queuenetcfg.Namespace, "Name", queuenetcfg.Name)
-			}
-
-			// Configure ONOS hosts with AMF if AMF connect point is provided in OnosDeviceNetcfg
-			if amfConnectPoint != "" {
-				amfList := &corev1.PodList{}
-				opts := []client.ListOption{
-					client.InNamespace(instance.Namespace),
-					client.MatchingLabels(map[string]string{"app.kubernetes.io/instance": "free5gc", "app.kubernetes.io/name": "amf"}),
-				}
-				err := r.client.List(context.TODO(), amfList, opts...)
-				if err != nil {
-					return reconcile.Result{}, err
-				}
-				// Access the first AMF
-				// Decode IP and MAC address of AMF SR-IOV interface from pod metadata
-				var amfIpAddr, amfMacAddr string
-				amfNetworkStatus := amfList.Items[0].ObjectMeta.Annotations["k8s.v1.cni.cncf.io/networks-status"]
-				var decoded []map[string]interface{}
-				err = json.Unmarshal([]byte(amfNetworkStatus), &decoded)
-				if err == nil {
-					for _, item := range decoded {
-						if item["name"].(string) == "amf-sriov" {
-							amfIpAddr = item["ips"].([]interface{})[0].(string)
-							amfMacAddr = item["mac"].(string)
-							break
-						}
-					}
-				} else {
-					reqLogger.Error(err, "Failed to decode networks status of AMF pod", "Namespace", amfList.Items[0].Namespace, "Name", amfList.Items[0].Name)
-				}
-
-				if amfIpAddr != "" && amfMacAddr != "" {
-					// Build ONOS host netcfg
-					amfHostNetcfg := fmt.Sprintf("{\"hosts\": {\"%s/-1\": {\"basic\": {\"ips\": [\"%s\"], \"locations\": [\"%s\"]}}}}",
-						amfMacAddr, amfIpAddr, amfConnectPoint)
-					err := onosNetcfg(strings.NewReader(amfHostNetcfg))
-					if err != nil {
-						reqLogger.Error(err, "Failed to configure host netcfg", "Body", amfHostNetcfg)
-					}
-					reqLogger.Info("Successfully configure host netcfg", "Body", amfHostNetcfg)
-				} else {
-					reqLogger.Info("Cannot access available AMF IP and MAC address")
-				}
-			}
-
-			// Activate bandwidth management application
-			// Create ONOS application command Helm values
-			vals := map[string]interface{}{
-				"appCommand": "activate",
-				"appName":    BW_MGNT_APP,
-			}
-
-			err = helm.InstallHelmChart(instance.Namespace, "onos-app", "activate-bw-mgnt", vals)
-			if err != nil {
-				return reconcile.Result{}, err
-			}
-
-			// Wait for activation job succeeded
-			for {
-				activation := &batchv1.Job{}
-				err := r.client.Get(context.TODO(), types.NamespacedName{Name: "activate-bw-mgnt-onos-app", Namespace: instance.Namespace}, activation)
-				if err != nil && errors.IsNotFound(err) {
-					reqLogger.Info("ONOS Bandwidth Management activation job not found after created", "Namespace", instance.Namespace, "Name", "activate-bw-mgnt-onos-app")
-					time.Sleep(1 * time.Second)
-					continue
-				} else if err != nil {
-					reqLogger.Error(err, "Failed to get ONOS Bandwidth Management activation job")
-					return reconcile.Result{}, err
-				}
-				// activation job exists
-				if activation.Status.Succeeded == int32(1) {
-					reqLogger.Info("ONOS Bandwidth Management job succeeded")
-					break
-				}
-				time.Sleep(1 * time.Second)
-			}
-		}
-		// Bandwidth Management application is activated
-	} else {
-		err := fmt.Errorf("Failed to get ONOS Bandwidth Management application")
-		return reconcile.Result{}, err
+		reqLogger.Error(err, "Failed to update ONOS host configuration with AMF pod")
 	}
 
-	// Check if all flows on fabric devices are added
-	err = waitForFlows()
+	// Configure ONOS hosts with UPF
+	err = r.configureUpfHost(instance.Namespace, instance.ObjectMeta.Labels["bans.io/slice"])
 	if err != nil {
-		return reconcile.Result{}, err
-	}
-
-	// Configure ONOS hosts with UPF slice if UPF connect point is provided in OnosDeviceNetcfg
-	if upfConnectPoint != "" {
-		sliceLabel := instance.ObjectMeta.Labels["bans.io/slice"]
-		upfList := &corev1.PodList{}
-		opts := []client.ListOption{
-			client.InNamespace(instance.Namespace),
-			client.MatchingLabels(map[string]string{
-				"app.kubernetes.io/instance": "free5gc-upf-" + sliceLabel,
-				"app.kubernetes.io/name":     "free5gc-upf",
-				"bans.io/slice":              sliceLabel,
-			}),
-		}
-		err := r.client.List(context.TODO(), upfList, opts...)
-		if err != nil {
-			return reconcile.Result{}, err
-		}
-		// Access the first UPF
-		// Decode IP and MAC address of UPF SR-IOV interface from pod metadata
-		var upfIpAddr, upfMacAddr string
-		if len(upfList.Items) == 0 {
-			reqLogger.Info("No UPF exists with BANS slice label", "bans.io/slice", sliceLabel)
-		} else {
-			upfNetworkStatus := upfList.Items[0].ObjectMeta.Annotations["k8s.v1.cni.cncf.io/networks-status"]
-			var decoded []map[string]interface{}
-			err = json.Unmarshal([]byte(upfNetworkStatus), &decoded)
-			if err == nil {
-				for _, item := range decoded {
-					if item["name"].(string) == "upf-sriov" {
-						upfIpAddr = item["ips"].([]interface{})[0].(string)
-						upfMacAddr = item["mac"].(string)
-						break
-					}
-				}
-			} else {
-				reqLogger.Error(err, "Failed to decode networks status of UPF pod", "Namespace", upfList.Items[0].Namespace, "Name", upfList.Items[0].Name)
-			}
-		}
-
-		if upfIpAddr != "" && upfMacAddr != "" {
-			// Build ONOS host netcfg
-			upfHostNetcfg := fmt.Sprintf("{\"hosts\": {\"%s/-1\": {\"basic\": {\"ips\": [\"%s\"], \"locations\": [\"%s\"]}}}}",
-				upfMacAddr, upfIpAddr, upfConnectPoint)
-			err := onosNetcfg(strings.NewReader(upfHostNetcfg))
-			if err != nil {
-				reqLogger.Error(err, "Failed to configure host netcfg", "Body", upfHostNetcfg)
-			}
-			reqLogger.Info("Successfully configure host netcfg", "Body", upfHostNetcfg)
-		} else {
-			reqLogger.Info("Cannot access available UPF IP and MAC address")
-		}
+		reqLogger.Error(err, "Failed to update ONOS host configuration with UPF pod")
 	}
 
 	// Send bandwidth slice request to ONOS
@@ -446,13 +158,14 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 		return reconcile.Result{}, nil
 	}
 	reqLogger.Info("Sending bandwidth slice request", "Body", string(buf))
-	req, err = http.NewRequest("POST", "http://"+ONOS_GUI_ENDPOINT+"/onos/bandwidth-management/slices", bytes.NewReader(buf))
+	httpClient := &http.Client{}
+	req, err := http.NewRequest("POST", "http://"+ONOS_GUI_ENDPOINT+"/onos/bandwidth-management/slices", bytes.NewReader(buf))
 	if err != nil {
 		return reconcile.Result{}, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-	resp, err = httpClient.Do(req)
+	resp, err := httpClient.Do(req)
 
 	// Read response from ONOS
 	if resp.StatusCode == http.StatusOK {
@@ -484,6 +197,99 @@ func (r *ReconcileBandwidthSlice) Reconcile(request reconcile.Request) (reconcil
 	return reconcile.Result{}, nil
 }
 
+// configureAmfHost updates ONOS host configuration with AMF pod in given namespace
+func (r *ReconcileBandwidthSlice) configureAmfHost(namespace string) error {
+	podList := &corev1.PodList{}
+	opts := []client.ListOption{
+		client.InNamespace(namespace),
+		client.MatchingLabels(map[string]string{"app.kubernetes.io/instance": "free5gc", "app.kubernetes.io/name": "amf"}),
+	}
+	err := r.client.List(context.TODO(), podList, opts...)
+	if err != nil {
+		return err
+	}
+
+	// Access the first AMF
+	// Decode IP and MAC address of AMF SR-IOV interface from pod metadata
+	var ipAddr, macAddr string
+	networkStatus := podList.Items[0].ObjectMeta.Annotations["k8s.v1.cni.cncf.io/networks-status"]
+	var decoded []map[string]interface{}
+	err = json.Unmarshal([]byte(networkStatus), &decoded)
+	if err != nil {
+		return err
+	}
+	for _, item := range decoded {
+		if item["name"].(string) == "amf-sriov" {
+			ipAddr = item["ips"].([]interface{})[0].(string)
+			macAddr = item["mac"].(string)
+			break
+		}
+	}
+
+	// Build ONOS host netcfg
+	nodeName := podList.Items[0].Spec.NodeName
+	hostNetcfg := fmt.Sprintf("{\"hosts\": {\"%s/-1\": {\"basic\": {\"ips\": [\"%s\"], \"locations\": [\"%s\"]}}}}",
+		macAddr, ipAddr, fabricconfig.FabricConfigs.ConnectPoints[nodeName])
+	err = onosNetcfg(strings.NewReader(hostNetcfg))
+	if err != nil {
+		return err
+	}
+
+	reqLogger.Info("Successfully configure host netcfg", "Body", hostNetcfg)
+	return nil
+}
+
+// configureUpfHost updates ONOS host configuration with UPF pods in given namespace and slice
+func (r *ReconcileBandwidthSlice) configureUpfHost(namespace, sliceLabel string) error {
+	podList := &corev1.PodList{}
+	opts := []client.ListOption{
+		client.InNamespace(namespace),
+		client.MatchingLabels(map[string]string{
+			"app.kubernetes.io/instance": "free5gc-upf-" + sliceLabel,
+			"app.kubernetes.io/name":     "free5gc-upf",
+			"bans.io/slice":              sliceLabel,
+		}),
+	}
+	err := r.client.List(context.TODO(), podList, opts...)
+	if err != nil {
+		return err
+	}
+
+	// Access the first UPF
+	// Decode IP and MAC address of UPF SR-IOV interface from pod metadata
+	var ipAddr, macAddr string
+	if len(podList.Items) == 0 {
+		err := fmt.Errorf("No UPF exists under namespace %s with BANS slice label bans.io/slice=%s", namespace, sliceLabel)
+		return err
+	}
+	networkStatus := podList.Items[0].ObjectMeta.Annotations["k8s.v1.cni.cncf.io/networks-status"]
+	var decoded []map[string]interface{}
+	err = json.Unmarshal([]byte(networkStatus), &decoded)
+	if err != nil {
+		return err
+	}
+	for _, item := range decoded {
+		if item["name"].(string) == "upf-sriov" {
+			ipAddr = item["ips"].([]interface{})[0].(string)
+			macAddr = item["mac"].(string)
+			break
+		}
+	}
+
+	// Build ONOS host netcfg
+	nodeName := podList.Items[0].Spec.NodeName
+	hostNetcfg := fmt.Sprintf("{\"hosts\": {\"%s/-1\": {\"basic\": {\"ips\": [\"%s\"], \"locations\": [\"%s\"]}}}}",
+		macAddr, ipAddr, fabricconfig.FabricConfigs.ConnectPoints[nodeName])
+	err = onosNetcfg(strings.NewReader(hostNetcfg))
+	if err != nil {
+		return err
+	}
+
+	reqLogger.Info("Successfully configure host netcfg", "Body", hostNetcfg)
+	return nil
+}
+
+// onosNetcfg uploads ONOS network configuration
 func onosNetcfg(body io.Reader) error {
 	httpClient := &http.Client{}
 	req, err := http.NewRequest("POST", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/network/configuration", body)
@@ -504,50 +310,11 @@ func onosNetcfg(body io.Reader) error {
 	return nil
 }
 
-// waitForDevicesConnected waits for all recorded devices to be connected
-func waitForDevicesConnected() error {
-	httpClient := &http.Client{}
-	for _, device := range deviceList {
-		for {
-			req, err := http.NewRequest("GET", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/devices/"+device, nil)
-			if err != nil {
-				return err
-			}
-			req.SetBasicAuth(ONOS_USERNAME, ONOS_PASSWORD)
-			resp, err := httpClient.Do(req)
-
-			if resp.StatusCode == http.StatusOK {
-				// Read response from ONOS
-				defer resp.Body.Close()
-				buf, err := ioutil.ReadAll(resp.Body)
-				if err != nil {
-					return err
-				}
-				var decoded map[string]interface{}
-				err = json.Unmarshal(buf, &decoded)
-				if err != nil {
-					return err
-				}
-				// Check device availability
-				if decoded["available"].(bool) == true {
-					break
-				} else {
-					reqLogger.Info("Device is unavailable", "Device", device)
-				}
-			} else {
-				reqLogger.Info("Failed to get device information", "Device", device, "HTTPStatus", resp.Status)
-			}
-			time.Sleep(3 * time.Second)
-		}
-	}
-
-	return nil
-}
-
 // waitForFlows waits for all flows to be added on fabric devices
 func waitForFlows() error {
 	httpClient := &http.Client{}
-	for _, device := range deviceList {
+	devices := fabricconfig.FabricConfigs.Devices
+	for _, device := range devices {
 		for {
 			req, err := http.NewRequest("GET", "http://"+ONOS_GUI_ENDPOINT+"/onos/v1/flows/"+device, nil)
 			if err != nil {

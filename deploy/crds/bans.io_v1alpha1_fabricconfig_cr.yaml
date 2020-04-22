@@ -1,0 +1,10 @@
+apiVersion: bans.io/v1alpha1
+kind: FabricConfig
+metadata:
+  name: example-fabricconfig
+spec:
+  # Add fields here
+  devices:
+    - device:fabric:s1
+  connectPoints:
+    node1: device:fabric:s1
