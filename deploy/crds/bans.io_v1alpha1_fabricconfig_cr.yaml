@@ -7,4 +7,4 @@ spec:
   devices:
     - device:fabric:s1
   connectPoints:
-    node1: device:fabric:s1
+    node1: device:fabric:s1/141
