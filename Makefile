@@ -50,7 +50,7 @@ transport: ## Prepare transport network environment
 		sleep 5; \
 	done
 
-install: setup transport ## Install all resources (CR/CRD's, RBAC and Operator)
+install: setup ## Install all resources (CR/CRD's, RBAC and Operator)
 	$(call echo_green," ....... Creating namespace .......")
 	-kubectl create namespace ${NAMESPACE}
 	$(call echo_green," ....... Applying CRDs .......")
