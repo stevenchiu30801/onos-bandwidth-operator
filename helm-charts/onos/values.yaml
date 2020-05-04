@@ -11,7 +11,7 @@ image:
   bmv2:
     # private repository
     repository: docker.winlab.nctu.me/onos
-    tag: latest
+    tag: bans5gc
   pullPolicy: IfNotPresent
 
 imagePullSecrets: []
